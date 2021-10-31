@@ -15,10 +15,15 @@ from rauc_hawkbit.generic_client import GenericDDIClient, Installer
 
 
 def result_callback(result):
-    print("Result:   {}".format('SUCCESSFUL' if result == 0 else 'FAILED' ))
+    print("Result:   {}".format('SUCCESSFUL' if result == 0 else 'FAILED'))
+
 
 def step_callback(percentage, message):
-    print("Progress: {:>3}% - {}".format(percentage, message))
+    if percentage:
+        print("Progress: {:>3}% - {}".format(percentage, message))
+    else:
+        print(message)
+
 
 async def main():
     # config parsing
@@ -66,12 +71,11 @@ async def main():
     TENANT_ID = config.get('client', 'tenant_id')
     TARGET_NAME = config.get('client', 'target_name')
     AUTH_TOKEN = config.get('client', 'auth_token')
-    ATTRIBUTES = {'MAC':config.get('client', 'mac_address')}
+    ATTRIBUTES = {'MAC': config.get('client', 'mac_address')}
     BUNDLE_DL_LOCATION = config.get('client', 'bundle_download_location')
 
     if args.debug:
         LOG_LEVEL = logging.DEBUG
-
 
     logging.basicConfig(level=LOG_LEVEL,
                         format='%(asctime)s %(levelname)-8s %(message)s',
@@ -79,31 +83,55 @@ async def main():
 
     class MyInstaller(Installer):
 
+        def is_executable(self, filename):
+            import stat
+            return stat.S_IXUSR & os.stat(filename)[stat.ST_MODE]
+
+        def extract_all_with_executable_permission(self, zf, target_dir):
+            """
+            See https://stackoverflow.com/questions/42326428/zipfile-in-python-file-permission
+            """
+            ZIP_UNIX_SYSTEM = 3
+            for info in zf.infolist():
+                extracted_path = zf.extract(info, target_dir)
+
+                if info.create_system == ZIP_UNIX_SYSTEM and os.path.isfile(extracted_path):
+                    unix_attributes = info.external_attr >> 16
+                    import stat
+                    if unix_attributes & stat.S_IXUSR:
+                        os.chmod(extracted_path, os.stat(extracted_path).st_mode | stat.S_IXUSR)
+
         async def install(self, filepath):
             print(f"Haha, I would install from {filepath}, size is {os.path.getsize(filepath)} B")
 
             root, ext = os.path.splitext(filepath)
             try:
                 if ext == ".zip":
-                    print("We have a zipfile, extracting...")
+                    await self.progress_callback(None, "We have a zipfile, extracting...")
                     with ZipFile(filepath) as z:
-                        z.extractall(path=os.path.dirname(filepath))
+                        self.extract_all_with_executable_permission(z, os.path.dirname(filepath))
                     print("Done...")
 
                     # Check if there is a start.sh / start.bat file
-                    start_file = os.path.join(os.path.dirname(filepath), "start.sh")
+                    start_file = os.path.join(os.path.dirname(filepath), "start")
                     print(f"Checking if {start_file} exists...")
                     if os.path.exists(start_file):
-                        print("Exists, starting...")
-                        output = os.popen(f"/bin/bash {start_file}")
+                        await self.progress_callback(51, "File exists, check if executable")
+                        if not self.is_executable(start_file):
+                            await self.progress_callback(52, f"File {start_file} is not executable...")
+                            return -1, "File was not executable, cancelling..."
+                        await self.progress_callback(52, "File exists and is executable, executing...")
+                        output = os.popen(f"{start_file}")
 
                         result = output.read()
 
                         print(f"Result was: {result}")
+                        return 0, f"File start.sh was executed and output was: '{result}'"
                     else:
                         print("No such file exists, cancel update...")
-                        return -1, "No such file exists, cancel update..."
+                        return -1, "No start file exists, cancel update..."
             except:
+                logging.error("We had another issue", exc_info=True)
                 return -1, "Other error"
 
             return 0, "worked"
@@ -112,9 +140,10 @@ async def main():
 
     async with aiohttp.ClientSession() as session:
         client = GenericDDIClient(session, HOST, SSL, TENANT_ID, TARGET_NAME,
-                                   AUTH_TOKEN, ATTRIBUTES, BUNDLE_DL_LOCATION, installer,
-                                   result_callback, step_callback)
+                                  AUTH_TOKEN, ATTRIBUTES, BUNDLE_DL_LOCATION, installer,
+                                  result_callback, step_callback)
         await client.start_polling()
+
 
 if __name__ == '__main__':
     # create event loop, open aiohttp client session and start polling

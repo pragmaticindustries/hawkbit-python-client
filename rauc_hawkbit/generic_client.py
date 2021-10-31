@@ -93,12 +93,13 @@ class GenericDDIClient(object):
 
         result, status_msg = parameters
 
-        try:
-            shutil.rmtree(self.action_location)
-            await self.progress_callback(100, f"Successfully deleted path {self.action_location} after update!")
-        except:
-            self.logger.warning("Unable to remove downloaded files after update!", exc_info=True)
-            await self.progress_callback(100, f"Unable to remove downloaded folder {self.action_location} after update!")
+        # Do not delete folder...
+        # try:
+        #     shutil.rmtree(self.action_location)
+        #     await self.progress_callback(100, f"Successfully deleted path {self.action_location} after update!")
+        # except:
+        #     self.logger.warning("Unable to remove downloaded files after update!", exc_info=True)
+        #     await self.progress_callback(100, f"Unable to remove downloaded folder {self.action_location} after update!")
 
         self.logger.info(status_msg)
 
