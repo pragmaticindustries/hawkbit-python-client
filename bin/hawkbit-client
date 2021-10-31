@@ -12,7 +12,6 @@ import logging
 import argparse
 
 from rauc_hawkbit.generic_client import GenericDDIClient, Installer
-from rauc_hawkbit.rauc_dbus_ddi_client import RaucDBUSDDIClient
 
 
 def result_callback(result):
@@ -80,7 +79,7 @@ async def main():
 
     class MyInstaller(Installer):
 
-        async def Install(self, filepath):
+        async def install(self, filepath):
             print(f"Haha, I would install from {filepath}, size is {os.path.getsize(filepath)} B")
 
             root, ext = os.path.splitext(filepath)
@@ -103,11 +102,11 @@ async def main():
                         print(f"Result was: {result}")
                     else:
                         print("No such file exists, cancel update...")
-                        return -1
+                        return -1, "No such file exists, cancel update..."
             except:
-                return -1
+                return -1, "Other error"
 
-            return 0
+            return 0, "worked"
 
     installer = MyInstaller()
 

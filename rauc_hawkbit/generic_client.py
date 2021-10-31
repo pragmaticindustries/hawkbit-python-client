@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 import abc
 import asyncio
+import shutil
 from abc import ABC
+from typing import Tuple
 
 from aiohttp.client_exceptions import ClientOSError, ClientResponseError
 from datetime import datetime, timedelta
@@ -10,7 +12,6 @@ import os.path
 import re
 import logging
 
-from .dbus_client import AsyncDBUSClient
 from .ddi.client import DDIClient, APIError
 from .ddi.client import (
     ConfigStatusExecution, ConfigStatusResult)
@@ -37,7 +38,10 @@ class Installer(ABC):
         self.complete_callback = complete_callback
 
     @abc.abstractmethod
-    def Install(self, filepath):
+    def install(self, filepath) -> Tuple[int, str]:
+        """
+        Should return 0 on "all okay" or something else, else
+        """
         pass
 
 
@@ -56,10 +60,14 @@ class GenericDDIClient(object):
         self.ddi = DDIClient(session, host, ssl, auth_token, tenant_id, target_name)
         self.action_id = None
 
-        bundle_dir = os.path.dirname(bundle_dl_location)
-        assert os.path.isdir(bundle_dir), 'Bundle directory must exist'
-        assert os.access(bundle_dir, os.W_OK), 'Bundle directory not writeable'
+        # Check and create bundle dir
+        if not os.path.isdir(bundle_dl_location):
+            # , 'Bundle directory must exist'
+            os.makedirs(bundle_dl_location)
+        else:
+            assert os.access(bundle_dl_location, os.W_OK), 'Bundle directory not writeable'
 
+        self.action_location = None
         self.bundle_dl_location = bundle_dl_location
         self.lock_keeper = lock_keeper
         self.result_callback = result_callback
@@ -83,10 +91,15 @@ class GenericDDIClient(object):
         if self.lock_keeper:
             self.lock_keeper.unlock(self)
 
-        result = parameters[0]
-        os.remove(self.bundle_dl_location)
-        status_msg = 'Rauc bundle update completed with result: {}'.format(
-            result)
+        result, status_msg = parameters
+
+        try:
+            shutil.rmtree(self.action_location)
+            await self.progress_callback(100, f"Successfully deleted path {self.action_location} after update!")
+        except:
+            self.logger.warning("Unable to remove downloaded files after update!", exc_info=True)
+            await self.progress_callback(100, f"Unable to remove downloaded folder {self.action_location} after update!")
+
         self.logger.info(status_msg)
 
         # send feedback to HawkBit
@@ -101,6 +114,7 @@ class GenericDDIClient(object):
             status_execution, status_result, [status_msg])
 
         self.action_id = None
+        self.action_location = None
 
         self.result_callback(result)
 
@@ -191,16 +205,8 @@ class GenericDDIClient(object):
             return
         try:
             await self.progress_callback(50, f"Start the Installation of {filepath}")
-            result = await self.installer.Install(filepath)
-            if result == 0:
-                await self.progress_callback(100, "Installation was done, giving feedback!")
-                await self.ddi.deploymentBase[action_id].feedback(
-                    DeploymentStatusExecution.closed, DeploymentStatusResult.success, [f"Installation procedure finished with status: {result}"])
-            else:
-                await self.progress_callback(100, f"Installer returned response {result}, consider update as failed!")
-                await self.ddi.deploymentBase[action_id].feedback(
-                    DeploymentStatusExecution.closed, DeploymentStatusResult.failure,
-                    [f"Installation procedure finished with status: {result}"])
+            result = await self.installer.install(filepath)
+            await self.complete_callback("", "", "", "", "", result)
         except:
             self.logger.warning("Something went wrong...", exc_info=True)
             raise Exception()
@@ -257,6 +263,12 @@ class GenericDDIClient(object):
         md5_hash = artifact['hashes']['md5']
         self.logger.info(f'Starting bundle download for {filename}')
 
+        self.action_id = action_id
+
+        # Create suitable download folder
+        self.action_location = os.path.join(self.bundle_dl_location, str(action_id))
+        os.makedirs(self.action_location)
+
         # Path of the downloaded file
         filepath = await self.download_artifact(action_id, filename, download_url, md5_hash)
 
@@ -296,7 +308,7 @@ class GenericDDIClient(object):
                 # API implementations might return static URLs, so bypass API
                 # methods and download bundle anyway
 
-                filepath = os.path.join(self.bundle_dl_location, filename)
+                filepath = os.path.join(self.action_location, filename)
 
                 checksum = await self.ddi.get_binary(url,
                                                      filepath)

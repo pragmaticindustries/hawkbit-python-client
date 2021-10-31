@@ -14,12 +14,12 @@ setup(
       setup_requires=['setuptools_scm'],
       install_requires=[
           'aiohttp>=3.3.2',
-          'gbulb>=0.5'
+          # 'gbulb>=0.5'
       ],
       packages=find_packages(),
       include_package_data=True,
       zip_safe=False,
       scripts=[
-          'bin/rauc-hawkbit-client'
+          'bin/hawkbit-client'
       ]
 )
